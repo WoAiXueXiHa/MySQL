@@ -1,4 +1,4 @@
-# MySQL 的 CRUD：从插入、查询、更新到删除
+# MySQL 的 CRUD：从基础操作到聚合统计
 
 CRUD 是数据库最常见的四类数据操作：
 
@@ -7,7 +7,7 @@ CRUD 是数据库最常见的四类数据操作：
 - `update`：更新数据，对应 `update`。
 - `delete`：删除数据，对应 `delete`。
 
-本文围绕一组简单的学生成绩表，系统介绍 MySQL 中 CRUD 的基础语法、常见使用方式和需要注意的边界问题。
+本文围绕一组简单的学生成绩表，系统介绍 MySQL 中 CRUD 的基础语法、常见使用方式和需要注意的边界问题。文中的 sql 语句统一使用小写风格。
 
 ## 1. create：新增数据
 
@@ -34,7 +34,7 @@ insert into stu values (100, 1000, 'aaa', null);
 insert into stu values (101, 1001, 'bbb', '123456');
 ```
 
-全列插入的问题是对表结构顺序依赖较强。如果后续新增字段、调整字段顺序，SQL 维护成本会变高。
+全列插入的问题是对表结构顺序依赖较强。如果后续新增字段、调整字段顺序，sql 维护成本会变高。
 
 ### 1.2 指定列插入
 
@@ -48,7 +48,7 @@ insert into stu (sn, name, qq) values
 
 指定列插入有两个好处：
 
-- SQL 含义更清晰，可读性更好。
+- sql 含义更清晰，可读性更好。
 - 可以省略有默认值、自增长或允许为 `null` 的字段。
 
 查询插入结果：
@@ -412,7 +412,21 @@ select count(math) as math_count
 from exam;
 ```
 
-`count(*)` 统计结果行数，`count(column)` 统计该列不为 `null` 的行数。当前示例中成绩字段都是 `not null`，所以二者结果一致；如果字段允许为 `null`，结果可能不同。
+也可以写成：
+
+```sql
+select count(1) as row_count
+from exam;
+```
+
+`count(*)` 和 `count(1)` 都常用于统计结果行数。`count(column)` 统计该列不为 `null` 的行数，如果字段允许为 `null`，它的结果可能小于 `count(*)`。
+
+例如，统计已经收集到 qq 号的学生数量：
+
+```sql
+select count(qq) as qq_count
+from stu;
+```
 
 查询数学最高分、最低分和平均分：
 
@@ -431,7 +445,24 @@ select sum(chinese + math + english) as class_total
 from exam;
 ```
 
+查询数学成绩大于 70 的最低分：
+
+```sql
+select min(math) as min_math
+from exam
+where math > 70;
+```
+
 聚合函数会把多行压缩成一个统计结果。如果查询列表里同时出现普通列和聚合函数，通常需要配合 `group by` 明确分组规则。
+
+例如，下面这种写法在语义上是不清晰的：
+
+```sql
+select name, avg(math)
+from exam;
+```
+
+`avg(math)` 是全表聚合结果，但 `name` 来自具体某一行。开启 `only_full_group_by` 后，这类查询会直接报错。正确做法是明确分组字段，或者只查询聚合结果。
 
 ### 2.6 group by 分组
 
@@ -523,7 +554,84 @@ having avg(score) > 80
 order by avg_score desc;
 ```
 
+再看一个更接近业务状态统计的例子。先创建任务表：
+
+```sql
+create table tasks (
+    id bigint primary key auto_increment comment '任务id',
+    title varchar(100) not null comment '任务标题',
+    status varchar(32) not null comment '任务状态',
+    retry_count int not null default 0 comment '重试次数',
+    created_at datetime default null comment '创建时间'
+) engine = innodb
+  default character set utf8mb4
+  default collate utf8mb4_0900_ai_ci
+  comment = '任务表';
+```
+
+插入测试数据：
+
+```sql
+insert into tasks (title, status, retry_count) values
+    ('learn go', 'pending', 0),
+    ('learn mysql', 'pending', 1),
+    ('learn redis', 'succeed', 0),
+    ('leetcode', 'failed', 3),
+    ('review net', 'succeed', 0);
+```
+
+统计每种任务状态下有多少任务：
+
+```sql
+select status, count(*) as task_count
+from tasks
+group by status;
+```
+
+统计每种任务状态下的最大重试次数：
+
+```sql
+select status, max(retry_count) as max_retry_count
+from tasks
+group by status;
+```
+
+筛选出任务数量大于 1 的状态：
+
+```sql
+select status, count(*) as task_count
+from tasks
+group by status
+having count(*) > 1;
+```
+
 使用 `group by` 时要注意：查询列中如果出现非聚合字段，这些字段通常应出现在 `group by` 中。否则结果语义不明确，在开启 `only_full_group_by` 的 MySQL 环境中会直接报错。
+
+### 2.7 select 的书写顺序
+
+一个比较完整的查询语句通常按照下面的顺序书写：
+
+```sql
+select column_list
+from table_name
+where condition
+group by group_column
+having group_condition
+order by sort_column
+limit row_count offset offset_count;
+```
+
+各部分的作用可以概括为：
+
+- `from`：确定从哪张表读取数据。
+- `where`：过滤原始行。
+- `group by`：对过滤后的数据分组。
+- `having`：过滤分组后的聚合结果。
+- `select`：决定最终返回哪些列或表达式。
+- `order by`：对结果排序。
+- `limit`：限制返回数量。
+
+实际执行过程和书写顺序并不完全一致，但按这个结构组织 sql，通常最容易阅读和维护。
 
 ## 3. update：更新数据
 
@@ -627,7 +735,7 @@ order by chinese + math + english asc
 limit 1;
 ```
 
-这条 SQL 表示删除总分最低的一名学生。使用 `limit` 时建议配合明确的 `order by`，否则删除哪几行可能不稳定。
+这条 sql 表示删除总分最低的一名学生。使用 `limit` 时建议配合明确的 `order by`，否则删除哪几行可能不稳定。
 
 ### 4.3 全表删除
 
@@ -638,6 +746,25 @@ delete from exam;
 ```
 
 这不会删除表结构，但会删除表里的全部行。生产环境中执行前必须确认库名、表名、条件、备份和事务策略。
+
+如果只是业务上不再展示某条数据，更常见的做法是软删除，也就是用字段标记删除状态，而不是直接物理删除：
+
+```sql
+alter table stu
+add deleted tinyint(1) not null default 0 comment '是否删除';
+
+update stu
+set deleted = 1
+where id = 100;
+```
+
+软删除可以保留历史数据，便于审计和恢复。但它也要求所有查询都正确过滤删除状态，例如：
+
+```sql
+select id, sn, name
+from stu
+where deleted = 0;
+```
 
 ### 4.4 delete、truncate 和 drop 的区别
 
@@ -663,7 +790,7 @@ drop table exam;
 - `truncate` 用于快速清空整张表。
 - `drop` 用于删除表结构和数据。
 
-`truncate` 和 `drop` 都是高风险操作，通常不应该在没有确认和备份的情况下执行。
+`truncate` 和 `drop` 都是高风险操作，通常不应该在没有确认和备份的情况下执行。`truncate` 面向整表清空，不能加 `where` 条件；`drop` 会删除表结构，影响更大。
 
 ## 5. 小结
 
@@ -674,4 +801,4 @@ MySQL 的 CRUD 可以概括为：
 - `update` 负责修改数据，执行前要确认 `where` 条件。
 - `delete` 负责删除数据，执行前要先查询确认影响范围。
 
-日常写 SQL 时，要特别注意三点：不要依赖无序查询的默认返回顺序，不要把 `null` 当成普通值比较，不要在没有确认条件的情况下执行全表 `update` 或 `delete`。
+日常写 sql 时，要特别注意三点：不要依赖无序查询的默认返回顺序，不要把 `null` 当成普通值比较，不要在没有确认条件的情况下执行全表 `update` 或 `delete`。
